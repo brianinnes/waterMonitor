@@ -1,0 +1,32 @@
+menu "WaterFlow meter"
+
+config ESP_WIFI_SSID
+    string "WiFi SSID"
+    default "myssid"
+    help
+	SSID (network name) to connect to.
+
+config ESP_WIFI_PASSWORD
+    string "WiFi Password"
+    default "mypassword"
+    help
+	WiFi password (WPA or WPA2) to use.
+
+config ESP_MQTT_BROKER_URI
+    string "MQTT Broker URI"
+    default "mqtts://localhost:8883"
+    help
+    format mqtts://<broker host name>:<broker port>
+
+config ESP_MQTT_BROKER_USERNAME
+    string "MQTT Broker username"
+    default "user"
+    help
+    Username to log onto broker
+
+config ESP_MQTT_BROKER_USERPWD
+    string "MQTT Broker user password"
+    default "password"
+    help
+    User password for broker
+endmenu
