@@ -37,3 +37,4 @@ sdkconfig*
 *.vscode
 build/
 *.pem
+sdkconfig
