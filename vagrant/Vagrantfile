@@ -1,0 +1,112 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# All Vagrant configuration is done below. The "2" in Vagrant.configure
+# configures the configuration version (we support older styles for
+# backwards compatibility). Please don't change it unless you know what
+# you're doing.
+Vagrant.configure("2") do |config|
+  # The most common configuration options are documented and commented below.
+  # For a complete reference, please see the online documentation at
+  # https://docs.vagrantup.com.
+
+  # Every Vagrant development environment requires a box. You can search for
+  # boxes at https://atlas.hashicorp.com/search.
+  config.vm.box = "debian/stretch64"
+  config.vbguest.auto_update = true
+  config.vm.hostname = "waterMonitor"
+  config.vm.network "public_network", ip:  "192.168.0.19", :netmask => "255.255.255.0", auto_config: false
+  config.vm.network "private_network", ip: "192.168.50.50"
+  config.vm.provider "virtualbox" do |v|
+    v.memory = 1024
+    v.cpus = 2
+    v.customize [
+        "storagectl", :id,
+        "--name", "SATA Controller",
+        "--hostiocache", "on"
+    ]
+  end
+  config.vm.network "forwarded_port", guest: 1880, host: 1880
+  config.vm.network "forwarded_port", guest: 1883, host: 1883
+  config.vm.network "forwarded_port", guest: 8883, host: 8883
+  config.vm.network "forwarded_port", guest: 5984, host: 5984
+  config.vm.synced_folder ".", "/vagrant", type: "virtualbox"
+
+  config.vm.provision "shell", inline: <<-SHELL
+    hostname -b waterMonitor
+    route add default gw 192.168.0.1
+    echo "********** Updating and extending base **********"
+    apt-get update
+    apt-get upgrade -y
+    apt-get install -y build-essential avahi-daemon avahi-discover libnss-mdns
+
+    echo "********** Installing CouchDB ************"
+    apt-get install -y curl erlang apt-transport-https
+    echo "deb https://apache.bintray.com/couchdb-deb stretch main" | tee -a /etc/apt/sources.list
+    wget -qO - https://couchdb.apache.org/repo/bintray-pubkey.asc | sudo apt-key add -
+    apt-get update
+    COUCHDB_PASSWORD=passw0rd
+    echo "couchdb couchdb/mode select standalone
+    couchdb couchdb/mode seen true
+    couchdb couchdb/bindaddress string 0.0.0.0
+    couchdb couchdb/bindaddress seen true
+    couchdb couchdb/adminpass password ${COUCHDB_PASSWORD}
+    couchdb couchdb/adminpass seen true
+    couchdb couchdb/adminpass_again password ${COUCHDB_PASSWORD}
+    couchdb couchdb/adminpass_again seen true" | debconf-set-selections
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --force-yes couchdb
+    
+    echo "********** Installing Mosquitto **********"
+    wget http://repo.mosquitto.org/debian/mosquitto-repo.gpg.key
+    apt-key add mosquitto-repo.gpg.key
+    cat > /etc/apt/sources.list.d/mosquitto.list <<- "EOF"
+deb http://repo.mosquitto.org/debian stretch main
+EOF
+  apt-get update
+  apt-get install -y mosquitto mosquitto-clients openssl
+  touch /etc/mosquitto/passwd
+  mosquitto_passwd -b /etc/mosquitto/passwd mosquitto passw0rd
+  cat > /etc/mosquitto/conf.d/default.conf <<- "EOF"
+allow_anonymous false
+password_file /etc/mosquitto/passwd
+EOF
+
+  echo "********** Securing Mosquitto **********"
+  openssl genrsa -des3 -passout pass:passw0rd -out m2mqtt_ca.key 2048 -batch
+  openssl req -new -x509 -days 3650 -key m2mqtt_ca.key -passin pass:passw0rd -out m2mqtt_ca.crt -subj "/C=GB/ST=Bournemouth/L=Bournemouth/O=MakeBournemouth/OU=vPiP/CN=makebournemouth.com" -batch
+  openssl genrsa -out m2mqtt_srv.key 2048 -batch
+  openssl req -new -out m2mqtt_srv.csr -key m2mqtt_srv.key -passin pass:passw0rd -subj "/C=GB/ST=Bournemouth/L=Bournemouth/O=MakeBournemouth/OU=waterMonitor/CN=waterMonitor.local" -batch
+  openssl x509 -req -in m2mqtt_srv.csr -CA m2mqtt_ca.crt -CAkey m2mqtt_ca.key -CAcreateserial -passin pass:passw0rd -out m2mqtt_srv.crt -days 3650
+  rm m2mqtt_srv.csr
+  mv m2mqtt_ca.* /etc/mosquitto/ca_certificates
+  mv m2mqtt_srv.* /etc/mosquitto/certs
+  cp /etc/mosquitto/ca_certificates/m2mqtt_ca.crt /vagrant/m2mqtt_ca.pem
+  cat > /etc/mosquitto/conf.d/security.conf <<- "EOF"
+port 8883
+cafile /etc/mosquitto/ca_certificates/m2mqtt_ca.crt
+certfile /etc/mosquitto/certs/m2mqtt_srv.crt
+keyfile /etc/mosquitto/certs/m2mqtt_srv.key
+tls_version tlsv1.2
+EOF
+  systemctl restart mosquitto.service
+
+  echo "********** install Node-RED **********"
+  wget -qO- https://deb.nodesource.com/setup_10.x | sudo -E bash -
+  apt-get install -y nodejs
+  npm install -g --unsafe-perm node-red
+  wget https://raw.githubusercontent.com/node-red/raspbian-deb-package/master/resources/nodered.service -O /lib/systemd/system/nodered.service
+  wget https://raw.githubusercontent.com/node-red/raspbian-deb-package/master/resources/node-red-start -O /usr/bin/node-red-start
+  wget https://raw.githubusercontent.com/node-red/raspbian-deb-package/master/resources/node-red-stop -O /usr/bin/node-red-stop
+  sed -i "s/User=pi/User=vagrant/g" /lib/systemd/system/nodered.service
+  sed -i "s/Group=pi/Group=vagrant/g" /lib/systemd/system/nodered.service
+  sed -i "s#WorkingDirectory=/home/pi#WorkingDirectory=/vagrant/nodered#g" /lib/systemd/system/nodered.service
+  sed -i 's%# uncomment the next line for a more verbose log output%Environment="NODE_RED_OPTIONS=-s=/vagrant/nodered/settings.js"%g' /lib/systemd/system/nodered.service
+  chmod +x /usr/bin/node-red-st*
+  systemctl daemon-reload
+  cd /vagrant/nodered
+  npm install
+  systemctl enable nodered.service
+  systemctl start nodered.service
+
+  SHELL
+end

@@ -38,3 +38,6 @@ sdkconfig*
 build/
 *.pem
 sdkconfig
+.vagrant
+node_modules
+*.backup

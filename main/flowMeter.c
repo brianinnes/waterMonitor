@@ -1,11 +1,12 @@
 #include <stdio.h>
-#include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <sys/time.h>
+#include <cJSON.h>
+#include <mqtt_client.h>
 #include "esp_system.h"
-#include "esp_spi_flash.h"
 #include "esp_event_loop.h"
 #include "esp_log.h"
 #include "mqtt_client.h"
@@ -100,10 +101,27 @@ void vTaskStats( void *pvParameters )
 void vTaskReport( void *pvParameters )
 {
     reportQ_t report;
+    int msg_id;
     while(1) {
+        //TODO Add Error checking!!!!
         ESP_LOGV(TAG, "Waiting on reporting queue");
 		/*BaseType_t rc = */ xQueueReceive(qReport, &report, portMAX_DELAY);
-        ESP_LOGI(TAG, "Reporting %f litres at a rate of %f l/min", report.litres, report.rate);
+        cJSON *json = cJSON_CreateObject();
+        cJSON_AddStringToObject(json, "device", CONFIG_ESP_MQTT_CLIENTID);
+        cJSON *data = cJSON_CreateObject();
+        cJSON_AddNumberToObject(data, "litres", report.litres);
+        cJSON_AddNumberToObject(data, "rate", report.rate);
+        cJSON_AddItemToObject(json, "d", data);
+
+        char *buffer = cJSON_PrintUnformatted(json);
+        cJSON_Delete(json);
+        ESP_LOGI(TAG, "Reporting : %s", buffer);
+
+        xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
+        msg_id = esp_mqtt_client_publish(client, "/water/flow", buffer, strlen(buffer), 0, 0);
+        xSemaphoreGive(xMQTTClientMutex);
+        ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
+        free(buffer);
     }
     vTaskDelete( NULL );
 }
@@ -121,7 +139,7 @@ void flow_init() {
     //create queues and start tasks to manage waterflow monitoring
     qPulse = xQueueCreate(10, sizeof(long));
     qReport = xQueueCreate(10, sizeof(reportQ_t));
-    xTaskCreate( vTaskStats, "Stats collector", 2000, NULL, 6, NULL );
-    xTaskCreate( vTaskReport, "Reporting", 2000, NULL, 5, NULL );
+    xTaskCreate( vTaskStats, "Stats collector", 2048, NULL, 6, NULL );
+    xTaskCreate( vTaskReport, "Reporting", 4096, NULL, 5, NULL );
     // xTaskCreate( vTaskPersist, "Persist", 2000, NULL, 4, NULL ); //TODO Implement
 }

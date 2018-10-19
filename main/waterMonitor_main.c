@@ -2,10 +2,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <freertos/event_groups.h>
-#include <apps/sntp/sntp.h>
+#include <lwip/apps/sntp.h>
 #include <sys/time.h>
 #include <mqtt_client.h>
+#include <mdns.h>
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 #include "nvs_flash.h"
@@ -14,9 +16,10 @@
 #include "esp_log.h"
 #include "waterMonitor.h"
 
-const char *MQTT_TAG = "coffeeMonitor";
-const char TAG[] = "flow";
+const char *MQTT_TAG = "waterMonitor_mqtt";
+const char TAG[] = "waterMonitor";
 esp_mqtt_client_handle_t client;
+SemaphoreHandle_t xMQTTClientMutex;
 
 
 // Event group
@@ -75,7 +78,7 @@ static void wifiStart() {
     };
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-    printf("waiting for wifi network...");
+    ESP_LOGI(TAG, "waiting for wifi network...");
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
 }
 
@@ -85,44 +88,38 @@ extern const uint8_t m2mqtt_ca_pem_end[]   asm("_binary_m2mqtt_ca_pem_end");
 
 static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 {
-    esp_mqtt_client_handle_t client = event->client;
-    int msg_id;
+    //esp_mqtt_client_handle_t client = event->client;
+    //int msg_id;
     // your_context_t *context = event->context;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
-            ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-            ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-            msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-            ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
+            ESP_LOGI(MQTT_TAG, "MQTT_EVENT_CONNECTED");
+            xSemaphoreGive(xMQTTClientMutex);
+            // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+            // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
             break;
         case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+            ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DISCONNECTED");
             break;
-
         case MQTT_EVENT_SUBSCRIBED:
-            ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-            msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
-            ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+            ESP_LOGI(MQTT_TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
             break;
         case MQTT_EVENT_UNSUBSCRIBED:
-            ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+            ESP_LOGI(MQTT_TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
             break;
         case MQTT_EVENT_PUBLISHED:
-            ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+            ESP_LOGI(MQTT_TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
             break;
         case MQTT_EVENT_DATA:
-            ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+            ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DATA");
             printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
             printf("DATA=%.*s\r\n", event->data_len, event->data);
             break;
         case MQTT_EVENT_ERROR:
-            ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+            ESP_LOGI(MQTT_TAG, "MQTT_EVENT_ERROR");
             break;
+        default:
+            ESP_LOGI(MQTT_TAG, "Unhandled event received %d", event->event_id);
     }
     return ESP_OK;
 }
@@ -130,11 +127,16 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 static void mqtt_app_start(void)
 {
     const esp_mqtt_client_config_t mqtt_cfg = {
+        .client_id = CONFIG_ESP_MQTT_CLIENTID,
         .uri = CONFIG_ESP_MQTT_BROKER_URI,
+// If using test vagrant, enter IP address of host laptop, comment out the .host entry
+// if using broker with DNS resolvable address     
+        .host = "192.168.0.32",
         .username = CONFIG_ESP_MQTT_BROKER_USERNAME,
         .password = CONFIG_ESP_MQTT_BROKER_USERPWD,
-        .event_handle = mqtt_event_handler,
-        .cert_pem = (const char *)m2mqtt_ca_pem_start,
+// uncomment out line below to enable server cert validation
+//        .cert_pem = (const char *)m2mqtt_ca_pem_start,
+        .event_handle = mqtt_event_handler
     };
 
     ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
@@ -145,7 +147,10 @@ static void mqtt_app_start(void)
 void app_main()
 {
     esp_log_level_set("*", ESP_LOG_INFO);
-    ESP_LOGI(TAG, "ESP32 Coffee water monitor!\n");
+    ESP_LOGI(TAG, "ESP32 water monitor!\n");
+
+    xMQTTClientMutex = xSemaphoreCreateMutex();
+    xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
 
     // connect to the wifi network
     nvs_flash_init();
@@ -155,6 +160,6 @@ void app_main()
     flow_init();
 
     // start the MQTT client
-    printf("Connecting to the MQTT server... ");
+    ESP_LOGI(TAG, "Connecting to the MQTT server... ");
     mqtt_app_start();
 }
