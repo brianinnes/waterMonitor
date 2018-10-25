@@ -3,16 +3,11 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
-#include <freertos/event_groups.h>
-#include <lwip/apps/sntp.h>
 #include <sys/time.h>
-#include <mqtt_client.h>
 #include <mdns.h>
+#include <http_server.h>
 #include "esp_system.h"
 #include "esp_spi_flash.h"
-#include "nvs_flash.h"
-#include "esp_wifi.h"
-#include "esp_event_loop.h"
 #include "esp_log.h"
 #include "waterMonitor.h"
 
@@ -20,67 +15,6 @@ const char *MQTT_TAG = "waterMonitor_mqtt";
 const char TAG[] = "waterMonitor";
 esp_mqtt_client_handle_t client;
 SemaphoreHandle_t xMQTTClientMutex;
-
-
-// Event group
-static EventGroupHandle_t wifi_event_group;
-const int CONNECTED_BIT = BIT0;
-
-// Wifi event handler
-static esp_err_t event_handler(void *ctx, system_event_t *event)
-{
-    switch(event->event_id) {
-
-    case SYSTEM_EVENT_STA_START:
-        esp_wifi_connect();
-        break;
-
-	case SYSTEM_EVENT_STA_GOT_IP:
-        xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
-        // get correct time with SNTP
-        sntp_setoperatingmode(SNTP_OPMODE_POLL);
-        sntp_setservername(0, "0.uk.pool.ntp.org");
-        sntp_setservername(1, "chronos.csr.net");
-        sntp_init();
-        break;
-
-	case SYSTEM_EVENT_STA_DISCONNECTED:
-		xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
-        break;
-
-	default:
-        break;
-    }
-
-	return ESP_OK;
-}
-
-static void wifiStart() {
-    wifi_event_group = xEventGroupCreate();
-    tcpip_adapter_init();
-    ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
-    wifi_country_t country = {
-        .cc="GB",
-        .schan=1,
-        .nchan=13, 
-        .policy=WIFI_COUNTRY_POLICY_AUTO
-    };
-    esp_wifi_set_country(&country);
-    wifi_init_config_t wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_config));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASSWORD,
-        },
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "waiting for wifi network...");
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
-}
 
 // MQTT client configuration
 extern const uint8_t m2mqtt_ca_pem_start[] asm("_binary_m2mqtt_ca_pem_start");
@@ -100,6 +34,7 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DISCONNECTED");
+            xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
             break;
         case MQTT_EVENT_SUBSCRIBED:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
@@ -145,16 +80,18 @@ static void mqtt_app_start(void)
 }
 
 void app_main()
-{
+{   
+    static httpd_handle_t server = NULL;
     esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set(TAG, ESP_LOG_VERBOSE);
+    esp_log_level_set("httpd_uri", ESP_LOG_VERBOSE);
     ESP_LOGI(TAG, "ESP32 water monitor!\n");
 
     xMQTTClientMutex = xSemaphoreCreateMutex();
     xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
 
     // connect to the wifi network
-    nvs_flash_init();
-    wifiStart();
+    wifiStart(&server);
 
     //create queues and start tasks to manage waterflow monitoring
     flow_init();

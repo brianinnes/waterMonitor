@@ -9,7 +9,6 @@
 #include "esp_system.h"
 #include "esp_event_loop.h"
 #include "esp_log.h"
-#include "mqtt_client.h"
 #include "waterMonitor.h" 
 
 // Flow meter handler
@@ -35,7 +34,7 @@ void vTaskStats( void *pvParameters )
     struct timeval previousReporting, now;
     reportQ_t report;
 
-	ESP_LOGI(TAG, ">> flow_task");
+	ESP_LOGI(TAG, "Starting flow_task");
     TickType_t delay_1Sec = 1000/portTICK_PERIOD_MS;
     gettimeofday(&previousReporting, 0);
     long interval = 0L;
@@ -104,7 +103,7 @@ void vTaskReport( void *pvParameters )
     int msg_id;
     while(1) {
         //TODO Add Error checking!!!!
-        ESP_LOGV(TAG, "Waiting on reporting queue");
+        ESP_LOGI(TAG, "Waiting on reporting queue");
 		/*BaseType_t rc = */ xQueueReceive(qReport, &report, portMAX_DELAY);
         cJSON *json = cJSON_CreateObject();
         cJSON_AddStringToObject(json, "device", CONFIG_ESP_MQTT_CLIENTID);
