@@ -41,4 +41,4 @@ sdkconfig
 .vagrant
 node_modules
 *.backup
-**/.config.json/
+**/.config.json
