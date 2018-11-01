@@ -35,3 +35,48 @@ On a command line in this directory you can use the following commands:
 - **vagrant suspend** - suspends the running virtual machine  
 - **vagrant resume** - resume a suspended virtual machine  
 - **vagrant halt** - stops a running virtual machine  
+
+## Vagrant setup
+
+You need to add a plugin to Vagrant to work with VirtualBox:
+
+```vagrant plugin install vagrant-vbguest```
+
+you should also ensure that you have all the plugins and boxes upto date, from within the vagrant directory of the cloned git repository issue the following commands:
+
+```bash
+vagrant box update
+vagrant plugin update
+```
+
+## Additional setup for Windows host
+
+Windows can be challenging when running Linux guests due to a number of limitations:
+
+- There is a maximum file path length of 260 characters
+- Only Administrators can create symbolic links
+
+For VirtualBox providers there is an additional issue that may present, where Vagrant cannot find Virtual Box.  The following instructions will help overcome these issues:
+
+1. Add the following System Environment variable using control panel:
+
+    ```VBOX_INSTALL_PATH = C:\Program Files\Oracle\VirtualBox\```
+
+2. Update security policy to allow your user to create symbolic links:
+   - Launch the security policy tool : **secpol.msc**
+   - Navigate to and select **Local Policies -> User Rights Assignment** in the left hand navigation panel
+   - Double click **Create symbolic links** in the right panel to open the property editor
+   - Click **Add User or Group**
+   - Enter your username then press **Check Names**
+   - Close the editor by pressing the **OK** button
+   - Close the security policy tool
+
+3. Enable long file names (introduced in the anniversary update to Windows 10)
+    - Launch **regedit**
+    - Navigate to **HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem** in left hand panel
+    - Select and double-click **LongPathsEnabled** in the right panel
+    - Change the value from 0 to 1 to enable long paths
+    - Select **OK** to close the editor
+    - Close RegEdit
+
+You need to reboot Windows to make the changes live
