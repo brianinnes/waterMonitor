@@ -24,7 +24,7 @@ The Vagrant VM also hosts Node-RED, which implements the back end functionality.
 
 To use the vagrant file you need:
 
-- An up to date installation of [VirtualBox](https://www.virtualbox.org)  
+- An up to date installation of [VirtualBox](https://www.virtualbox.org) with the additional Extension pack installed 
 - An up to date installation of [Vagrant](https://www.vagrantup.com)  
 
 On a command line in this directory you can use the following commands:

@@ -4,7 +4,5 @@
     "version": "0.0.1",
     "private": true,
     "dependencies": {
-        "node-red-contrib-cloudantplus": "~0.1.0",
-        "node-red-dashboard": "~2.9.8"
     }
 }
