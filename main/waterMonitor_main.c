@@ -5,7 +5,7 @@
 #include <freertos/semphr.h>
 #include <sys/time.h>
 #include <mdns.h>
-#include <http_server.h>
+#include <esp_http_server.h>
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 #include "esp_log.h"

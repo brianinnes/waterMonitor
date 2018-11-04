@@ -17,7 +17,7 @@
 #include <esp_log.h>
 #include <esp_err.h>
 
-#include <http_server.h>
+#include <esp_http_server.h>
 #include "httpd_priv.h"
 
 static const char *TAG = "httpd_sess";

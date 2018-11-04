@@ -18,7 +18,7 @@
 #include <esp_log.h>
 #include <esp_err.h>
 #include <http_parser.h>
-#include <http_server.h>
+#include <esp_http_server.h>
 
 #include "httpd_priv.h"
 #include "osal.h"
