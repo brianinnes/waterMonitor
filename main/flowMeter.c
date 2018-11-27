@@ -28,7 +28,7 @@ TickType_t delay_100ms = 100/portTICK_PERIOD_MS;
 #define DEFAULT_VREF  1100
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<PRE_TDS_GPIO) | (1ULL<<POST_TDS_GPIO))
 #define PERSIST_DIFFERENCE 500
-#define PERSIST_PERIOD 1800
+#define PERSIST_PERIOD 900
 
 static esp_adc_cal_characteristics_t *adc_chars;
 static adc1_channel_t pre, post;
