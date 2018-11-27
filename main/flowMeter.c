@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "waterMonitor.h"
 #include "esp_adc_cal.h"
+#include "esp_spiffs.h"
 
 // Flow meter handler
 long litreClicks = 0L;
@@ -26,10 +27,12 @@ TickType_t delay_100ms = 100/portTICK_PERIOD_MS;
 #define POST_TDS_ADC (34)
 #define DEFAULT_VREF  1100
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<PRE_TDS_GPIO) | (1ULL<<POST_TDS_GPIO))
+#define PERSIST_DIFFERENCE 500
+#define PERSIST_PERIOD 1800
 
 static esp_adc_cal_characteristics_t *adc_chars;
-adc1_channel_t pre, post;
-static QueueHandle_t qPulse, qStoppedFlow, qReportFlow, qReportQuality /*, qPersist*/;
+static adc1_channel_t pre, post;
+static QueueHandle_t qPulse, qStoppedFlow, qPersistPulses, qReportFlow, qReportQuality /*, qPersist*/;
 SemaphoreHandle_t sCountSem;
 bool flowing = false;
 
@@ -148,19 +151,17 @@ void vTaskQuality ( void *pvParameters )
 
 void vTaskStats( void *pvParameters )
 {
-    long pulses, previousReportingPulses;
+    long pulses, previousReportingPulses, previousReportingTime;
     float previousReportingRate;
-    struct timeval previousReporting, now;
+    struct timeval now;
     reportFlowQ_t report;
 
 	ESP_LOGI(TAG, "Starting flow_task");
-    gettimeofday(&previousReporting, 0);
     long interval = 0L;
     pulses = getCurrentPulses();
     previousReportingRate = 0.0;
     previousReportingPulses = pulses;
-    previousReporting.tv_sec = 0;
-    previousReporting.tv_usec = 0;
+    previousReportingTime = 0;
 
 	gpio_config_t gpioConfig;
 	gpioConfig.pin_bit_mask = GPIO_SEL_27;
@@ -182,9 +183,14 @@ void vTaskStats( void *pvParameters )
             ESP_LOGD(TAG, "Timeout waiting for pulse, pulse count = %li", pulses);
         } else {
             setCurrentPulses(pulses);
+            xQueueSendToBack(qPersistPulses, &pulses, ( TickType_t )0);
         }
-        interval = (now.tv_sec-previousReporting.tv_sec)*1000000 + now.tv_usec-previousReporting.tv_usec;
-        ESP_LOGV(TAG, "Interval = %li", interval);
+        interval = now.tv_sec-previousReportingTime;
+        if ((0 > interval) || (32 < interval)) {
+            ESP_LOGW(TAG, "Interval out of bounds = %li", interval);
+            interval = 0;
+            previousReportingTime = now.tv_sec;
+        }
         if (pulses == previousReportingPulses) {
             if(true == flowing) {
                 ESP_LOGI(TAG, "Flow stopped");
@@ -192,7 +198,7 @@ void vTaskStats( void *pvParameters )
                 flowing = false;
             }
             // no water has been used
-            if ((interval > 30000000L) || (previousReportingRate > 0.01)) {
+            if ((interval > 30L) || (previousReportingRate > 0.01)) {
                 //30 second reporting when idle
                 report.tme.tv_sec = now.tv_sec;
                 report.tme.tv_usec = now.tv_usec;
@@ -200,27 +206,26 @@ void vTaskStats( void *pvParameters )
                 report.rate = 0.0;
                 ESP_LOGI(TAG, "Sending reporting data");
                 xQueueSendToBack(qReportFlow, &report, ( TickType_t )0);
-                previousReporting.tv_sec = now.tv_sec;
-                previousReporting.tv_usec = now.tv_usec;
+                previousReportingTime = now.tv_sec;
                 previousReportingPulses = pulses;
                 previousReportingRate = 0.0;
+                // give persist task chance to persist latest value
+                xQueueSendToBack(qPersistPulses, &pulses, ( TickType_t )0);
             }
         } else {
             flowing = true;
-            if (interval > 1000000L) {
+            if (interval > 1L) {
                 //water being used - 1 second reporting
                 report.tme.tv_sec = now.tv_sec;
                 report.tme.tv_usec = now.tv_usec;
                 report.litres = (float)pulses/450;
-                report.rate = ((float)(pulses-previousReportingPulses)/450) * 60 / (interval / 1000000);
+                report.rate = ((float)(pulses-previousReportingPulses)/450) * 60 / interval;
                 xQueueSendToBack(qReportFlow, &report, ( TickType_t )0);
-                previousReporting.tv_sec = now.tv_sec;
-                previousReporting.tv_usec = now.tv_usec;
+                previousReportingTime = now.tv_sec;
                 previousReportingPulses = pulses;
                 previousReportingRate = report.rate;
             }
         }
-		ESP_LOGD(TAG, "Woke from interrupt queue wait: %i", rc);
     }
     vTaskDelete( NULL );
 }
@@ -281,7 +286,64 @@ void vTaskReportQuality( void *pvParameters )
     vTaskDelete( NULL );
 }
 
+void persistPulses(long pulses) {
+    FILE* f = fopen("/fs/pulses.txt", "wb");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return;
+    }
+    fwrite(&pulses, sizeof pulses, 1, f);
+    fclose(f);
+    ESP_LOGI(TAG, "Pulse file written");    
+}
+
+long readPulses() {
+    long ret;
+    FILE* f = fopen("/fs/pulses.txt", "rb");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return 0L;
+    }
+    fread(&ret, sizeof ret, 1, f);
+    fclose(f);
+    ESP_LOGI(TAG, "Pulse file read = %li", ret);
+    return ret;
+}
+
+void vTaskPersist( void *pvParameters )
+{
+    long pulses, nextPersisPulses, nextPersistTime, lastPersistPulses;
+    struct timeval now;
+    ESP_LOGI(TAG, "Starting persist task");
+
+    gettimeofday(&now, 0);
+    nextPersistTime = now.tv_sec + PERSIST_PERIOD;
+    lastPersistPulses = getCurrentPulses();
+    nextPersisPulses = lastPersistPulses + PERSIST_DIFFERENCE;
+
+    while(1) {
+        ESP_LOGD(TAG, "Waiting on persit Pulses queue");
+		xQueueReceive(qPersistPulses, &pulses, portMAX_DELAY);
+        gettimeofday(&now, 0);
+        // don't persist too often 
+        // (big change in pulse count or a period of time since last persist)
+        if ((now.tv_sec > nextPersistTime) || (pulses > nextPersisPulses)) {
+            // don't persist if value hasn't changed
+            if (lastPersistPulses != pulses) {
+                persistPulses(pulses);
+                lastPersistPulses = pulses;
+                nextPersisPulses = lastPersistPulses + PERSIST_DIFFERENCE;
+                nextPersistTime = now.tv_sec + PERSIST_PERIOD;
+            }
+        }
+    }
+    esp_vfs_spiffs_unregister(NULL);
+    ESP_LOGI(TAG, "SPIFFS unmounted");
+    vTaskDelete( NULL );
+}
+
 void flow_init() {
+    BaseType_t rc;
     // setup adc
     pre = adc1PinToChannel(PRE_TDS_ADC);
     post = adc1PinToChannel(POST_TDS_ADC);
@@ -296,36 +358,92 @@ void flow_init() {
 
     // setup GPIO
     gpio_config_t io_conf;
-    //disable interrupt
     io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-    //set as output mode
     io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO18/19
     io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    //disable pull-down mode
     io_conf.pull_down_en = 0;
-    //disable pull-up mode
     io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
     gpio_config(&io_conf);
     gpio_set_level(PRE_TDS_GPIO, 0);
     gpio_set_level(POST_TDS_GPIO, 0);
+
+    ESP_LOGI(TAG, "Initializing SPIFFS");
+    
+    esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/fs",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = true
+    };
+    
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+    }
 
     //create queues and start tasks to manage waterflow monitoring
     sCountSem = xSemaphoreCreateBinary();
     if (NULL != sCountSem) {
         // semaphore created OK
-        protectedCurrPulses = 0;
+        protectedCurrPulses = readPulses();
+        litreClicks = protectedCurrPulses;
         xSemaphoreGive(sCountSem);
     
         qPulse = xQueueCreate(10, sizeof(long));
+        if (NULL == qPulse) {
+            ESP_LOGE(TAG, "Failed to create qPulse queue");
+            esp_restart();
+        }
         qStoppedFlow = xQueueCreate(5, sizeof(long));
+        if (NULL == qStoppedFlow) {
+            ESP_LOGE(TAG, "Failed to create qStoppedFlow queue");
+            esp_restart();
+        }
+        qPersistPulses = xQueueCreate(5, sizeof(long));
+        if (NULL == qPersistPulses) {
+            ESP_LOGE(TAG, "Failed to create qPersistPulses queue");
+            esp_restart();
+        }
         qReportFlow = xQueueCreate(5, sizeof(reportFlowQ_t));
+        if (NULL == qReportFlow) {
+            ESP_LOGE(TAG, "Failed to create qReportFlow queue");
+            esp_restart();
+        }
         qReportQuality = xQueueCreate(5, sizeof(reportQualityQ_t));
-        xTaskCreate( vTaskStats, "Stats collector", 4096, NULL, 6, NULL );
-        xTaskCreate( vTaskQuality, "Quality collector", 2048, NULL, 6, NULL);
-        xTaskCreate( vTaskReportFlow, "Report flow", 4096, NULL, 5, NULL );
-        xTaskCreate( vTaskReportQuality, "Report quality", 4096, NULL, 5, NULL);
-        // xTaskCreate( vTaskPersist, "Persist", 2000, NULL, 4, NULL ); //TODO Implement
+        if (NULL == qReportQuality) {
+            ESP_LOGE(TAG, "Failed to create qReportQuality queue");
+            esp_restart();
+        }
+        rc = xTaskCreate( vTaskStats, "Stats collector", 4096, NULL, 6, NULL );
+        if (pdPASS != rc) {
+            ESP_LOGE(TAG, "Failed to create Stats collector task");
+            esp_restart();
+        }
+        rc = xTaskCreate( vTaskQuality, "Quality collector", 2048, NULL, 6, NULL);
+        if (pdPASS != rc) {
+            ESP_LOGE(TAG, "Failed to create Quality collector task");
+            esp_restart();
+        }
+        rc = xTaskCreate( vTaskReportFlow, "Report flow", 4096, NULL, 5, NULL );
+        if (pdPASS != rc) {
+            ESP_LOGE(TAG, "Failed to create Report flow task");
+            esp_restart();
+        }
+        rc = xTaskCreate( vTaskReportQuality, "Report quality", 4096, NULL, 5, NULL);
+        if (pdPASS != rc) {
+            ESP_LOGE(TAG, "Failed to create Report quality task");
+            esp_restart();
+        }
+        rc = xTaskCreate( vTaskPersist, "Persist", 2000, NULL, 4, NULL ); //TODO Implement
+        if (pdPASS != rc) {
+            ESP_LOGE(TAG, "Failed to create Persist task");
+            esp_restart();
+        }
     }
 }
