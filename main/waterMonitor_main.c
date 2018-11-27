@@ -29,8 +29,6 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_CONNECTED");
             xSemaphoreGive(xMQTTClientMutex);
-            // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
-            // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DISCONNECTED");
@@ -81,22 +79,27 @@ static void mqtt_app_start(void)
 
 void app_main()
 {   
+    BaseType_t rc;
     static httpd_handle_t server = NULL;
     esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set(TAG, ESP_LOG_VERBOSE);
-    esp_log_level_set("httpd_uri", ESP_LOG_VERBOSE);
+    // esp_log_level_set(TAG, ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "ESP32 water monitor!\n");
 
-    xMQTTClientMutex = xSemaphoreCreateMutex();
-    xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
-
-    //create queues and start tasks to manage waterflow monitoring
-    flow_init();
+    xMQTTClientMutex = xSemaphoreCreateBinary();
+    if (NULL == xMQTTClientMutex) {
+        ESP_LOGE(TAG, "Failed to create xMQTTClientMutex");
+        esp_restart();
+    }
+    rc = xSemaphoreTake(xMQTTClientMutex, 0);
+    if (pdPASS != rc) {
+        ESP_LOGW(TAG, "Failed to take xMQTTClientMutex");
+    }
     
     // connect to the wifi network
     wifiStart(&server);
-
     // start the MQTT client
     ESP_LOGI(TAG, "Connecting to the MQTT server... ");
     mqtt_app_start();
+    //create queues and start tasks to manage waterflow monitoring
+    flow_init();
 }
