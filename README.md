@@ -2,6 +2,16 @@
 
 ESP32 project to monitor water quality
 
+##
+
+The following connections should be made:
+
+- GPIO 34 : data pin for TDS sensor **AFTER** the filter
+- GPIO 33 : data pin for TDS sensor **BEFORE** the filter
+- GPIO 27 : Flow meter
+- GPIO 26 : +'ve pin for TDS sensor **AFTER** the filter
+- GPIO 25 : +'ve pin for TDS sensor **BEFORE** the filter
+
 ## Building the project
 
 This project needs the ESP-IDF tooling installed.  Follow the [getting started instructions on the ESP-IDF site.](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html#setup-toolchain)

@@ -66,7 +66,7 @@ static void mqtt_app_start(void)
         .uri = CONFIG_ESP_MQTT_BROKER_URI,
 // If using test vagrant, enter IP address of host laptop, comment out the .host entry
 // if using broker with DNS resolvable address     
-        .host = "192.168.0.32",
+        .host = "192.168.0.136",
         .username = CONFIG_ESP_MQTT_BROKER_USERNAME,
         .password = CONFIG_ESP_MQTT_BROKER_USERPWD,
 // uncomment out line below to enable server cert validation
@@ -90,11 +90,11 @@ void app_main()
     xMQTTClientMutex = xSemaphoreCreateMutex();
     xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
 
-    // connect to the wifi network
-    wifiStart(&server);
-
     //create queues and start tasks to manage waterflow monitoring
     flow_init();
+    
+    // connect to the wifi network
+    wifiStart(&server);
 
     // start the MQTT client
     ESP_LOGI(TAG, "Connecting to the MQTT server... ");
