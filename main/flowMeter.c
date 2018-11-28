@@ -17,9 +17,11 @@
 // Flow meter handler
 long litreClicks = 0L;
 long protectedCurrPulses = 0L;
+TickType_t delay_5Sec = 5000/portTICK_PERIOD_MS;
 TickType_t delay_1Sec = 1000/portTICK_PERIOD_MS;
 TickType_t delay_100ms = 100/portTICK_PERIOD_MS;
 
+#define PULSEPERLITRE 1870
 #define FLOW_GPIO (27)
 #define PRE_TDS_GPIO (25)
 #define PRE_TDS_ADC (33)
@@ -28,7 +30,7 @@ TickType_t delay_100ms = 100/portTICK_PERIOD_MS;
 #define DEFAULT_VREF  1100
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<PRE_TDS_GPIO) | (1ULL<<POST_TDS_GPIO))
 #define PERSIST_DIFFERENCE 500
-#define PERSIST_PERIOD 900
+#define PERSIST_PERIOD 600
 
 static esp_adc_cal_characteristics_t *adc_chars;
 static adc1_channel_t pre, post;
@@ -204,7 +206,7 @@ void vTaskStats( void *pvParameters )
                 report.tme.tv_usec = now.tv_usec;
                 report.litres = (float)pulses/450;
                 report.rate = 0.0;
-                ESP_LOGI(TAG, "Sending reporting data");
+                ESP_LOGD(TAG, "Sending reporting data");
                 xQueueSendToBack(qReportFlow, &report, ( TickType_t )0);
                 previousReportingTime = now.tv_sec;
                 previousReportingPulses = pulses;
@@ -218,8 +220,8 @@ void vTaskStats( void *pvParameters )
                 //water being used - 1 second reporting
                 report.tme.tv_sec = now.tv_sec;
                 report.tme.tv_usec = now.tv_usec;
-                report.litres = (float)pulses/450;
-                report.rate = ((float)(pulses-previousReportingPulses)/450) * 60 / interval;
+                report.litres = (float)pulses/PULSEPERLITRE;
+                report.rate = ((float)(pulses-previousReportingPulses)/PULSEPERLITRE) * 60 / interval;
                 xQueueSendToBack(qReportFlow, &report, ( TickType_t )0);
                 previousReportingTime = now.tv_sec;
                 previousReportingPulses = pulses;
@@ -249,10 +251,14 @@ void vTaskReportFlow( void *pvParameters )
         cJSON_Delete(json);
         ESP_LOGI(TAG, "Reporting : %s", buffer);
 
-        xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
-        msg_id = esp_mqtt_client_publish(client, "/water/flow", buffer, strlen(buffer), 0, 0);
-        xSemaphoreGive(xMQTTClientMutex);
-        ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
+        BaseType_t rc = xSemaphoreTake(xMQTTClientMutex, delay_1Sec);
+        if (pdPASS != rc) {
+            msg_id = esp_mqtt_client_publish(client, "/water/flow", buffer, strlen(buffer), 0, 0);
+            xSemaphoreGive(xMQTTClientMutex);
+            ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
+        } else {
+            ESP_LOGW(MQTT_TAG, "ReportFlow : Failed to get MQTT Mutex");
+        }
         free(buffer);
     }
     vTaskDelete( NULL );
@@ -277,16 +283,23 @@ void vTaskReportQuality( void *pvParameters )
         cJSON_Delete(json);
         ESP_LOGI(TAG, "Reporting : %s", buffer);
 
-        xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
-        msg_id = esp_mqtt_client_publish(client, "/water/quality", buffer, strlen(buffer), 0, 0);
-        xSemaphoreGive(xMQTTClientMutex);
-        ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
+        BaseType_t rc = xSemaphoreTake(xMQTTClientMutex, delay_1Sec);
+        if (pdPASS != rc) {
+            msg_id = esp_mqtt_client_publish(client, "/water/quality", buffer, strlen(buffer), 0, 0);
+            xSemaphoreGive(xMQTTClientMutex);
+            ESP_LOGD(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
+        } else {
+            ESP_LOGW(MQTT_TAG, "ReportQuality : Failed to get MQTT Mutex");
+        }
         free(buffer);
     }
     vTaskDelete( NULL );
 }
 
 void persistPulses(long pulses) {
+    if (rename("/fs/pulses.txt", "/fs/pulses_old.txt") != 0) {
+        ESP_LOGE(TAG, "Rename failed");
+    }
     FILE* f = fopen("/fs/pulses.txt", "wb");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing");
@@ -294,6 +307,7 @@ void persistPulses(long pulses) {
     }
     fwrite(&pulses, sizeof pulses, 1, f);
     fclose(f);
+    remove("/fs/pulses_old.txt");
     ESP_LOGI(TAG, "Pulse file written");    
 }
 
@@ -302,10 +316,24 @@ long readPulses() {
     FILE* f = fopen("/fs/pulses.txt", "rb");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open file for reading");
-        return 0L;
+        f = fopen("/fs/pulses_old.txt", "rb");
+        if (f == NULL) {
+            return 0L;
+        }
     }
-    fread(&ret, sizeof ret, 1, f);
+    size_t s = fread(&ret, sizeof ret, 1, f);
     fclose(f);
+    if (s == 0) {
+        f = fopen("/fs/pulses_old.txt", "rb");
+        if (f == NULL) {
+            return 0L;
+        }
+        size_t s = fread(&ret, sizeof ret, 1, f);
+        fclose(f);
+        if (s == 0) {
+            return 0L;
+        }
+    }
     ESP_LOGI(TAG, "Pulse file read = %li", ret);
     return ret;
 }

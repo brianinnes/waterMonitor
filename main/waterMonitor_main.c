@@ -22,17 +22,21 @@ extern const uint8_t m2mqtt_ca_pem_end[]   asm("_binary_m2mqtt_ca_pem_end");
 
 static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 {
-    //esp_mqtt_client_handle_t client = event->client;
-    //int msg_id;
-    // your_context_t *context = event->context;
+    BaseType_t rc;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_CONNECTED");
-            xSemaphoreGive(xMQTTClientMutex);
+            rc = xSemaphoreGive(xMQTTClientMutex);
+            if (pdPASS != rc) {
+                ESP_LOGW(MQTT_TAG, "Failed tp get MQTT Mutex MQTT_EVENT_CONNECTED handler");
+            }
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DISCONNECTED");
-            xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
+            rc = xSemaphoreTake(xMQTTClientMutex, portMAX_DELAY);
+            if (pdPASS != rc) {
+                ESP_LOGW(MQTT_TAG, "Failed tp get MQTT Mutex MQTT_EVENT_DISCONNECTED handler");
+            }
             break;
         case MQTT_EVENT_SUBSCRIBED:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
@@ -64,7 +68,7 @@ static void mqtt_app_start(void)
         .uri = CONFIG_ESP_MQTT_BROKER_URI,
 // If using test vagrant, enter IP address of host laptop, comment out the .host entry
 // if using broker with DNS resolvable address     
-        .host = "192.168.0.136",
+        .host = "192.168.0.32",
         .username = CONFIG_ESP_MQTT_BROKER_USERNAME,
         .password = CONFIG_ESP_MQTT_BROKER_USERPWD,
 // uncomment out line below to enable server cert validation
@@ -90,10 +94,11 @@ void app_main()
         ESP_LOGE(TAG, "Failed to create xMQTTClientMutex");
         esp_restart();
     }
-    rc = xSemaphoreTake(xMQTTClientMutex, 0);
-    if (pdPASS != rc) {
-        ESP_LOGW(TAG, "Failed to take xMQTTClientMutex");
-    }
+    //rc = xSemaphoreTake(xMQTTClientMutex, 0);
+    //if (pdPASS != rc) {
+    //    ESP_LOGW(TAG, "Failed to take xMQTTClientMutex");
+    //    esp_restart();
+    //}
     
     // connect to the wifi network
     wifiStart(&server);
