@@ -252,7 +252,7 @@ void vTaskReportFlow( void *pvParameters )
         ESP_LOGI(TAG, "Reporting : %s", buffer);
 
         BaseType_t rc = xSemaphoreTake(xMQTTClientMutex, delay_1Sec);
-        if (pdPASS != rc) {
+        if (pdPASS == rc) {
             msg_id = esp_mqtt_client_publish(client, "/water/flow", buffer, strlen(buffer), 0, 0);
             xSemaphoreGive(xMQTTClientMutex);
             ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
@@ -284,7 +284,7 @@ void vTaskReportQuality( void *pvParameters )
         ESP_LOGI(TAG, "Reporting : %s", buffer);
 
         BaseType_t rc = xSemaphoreTake(xMQTTClientMutex, delay_1Sec);
-        if (pdPASS != rc) {
+        if (pdPASS == rc) {
             msg_id = esp_mqtt_client_publish(client, "/water/quality", buffer, strlen(buffer), 0, 0);
             xSemaphoreGive(xMQTTClientMutex);
             ESP_LOGD(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
