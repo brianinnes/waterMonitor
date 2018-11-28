@@ -204,7 +204,7 @@ void vTaskStats( void *pvParameters )
                 //30 second reporting when idle
                 report.tme.tv_sec = now.tv_sec;
                 report.tme.tv_usec = now.tv_usec;
-                report.litres = (float)pulses/450;
+                report.litres = (float)pulses/PULSEPERLITRE;
                 report.rate = 0.0;
                 ESP_LOGD(TAG, "Sending reporting data");
                 xQueueSendToBack(qReportFlow, &report, ( TickType_t )0);
