@@ -19,6 +19,7 @@ SemaphoreHandle_t xMQTTClientMutex;
 // MQTT client configuration
 extern const uint8_t m2mqtt_ca_pem_start[] asm("_binary_m2mqtt_ca_pem_start");
 extern const uint8_t m2mqtt_ca_pem_end[]   asm("_binary_m2mqtt_ca_pem_end");
+static void mqtt_app_start(void);
 
 static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 {
@@ -63,6 +64,7 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 
 static void mqtt_app_start(void)
 {
+    esp_err_t rc;
     const esp_mqtt_client_config_t mqtt_cfg = {
         .client_id = CONFIG_ESP_MQTT_CLIENTID,
         .uri = CONFIG_ESP_MQTT_BROKER_URI,
@@ -78,7 +80,10 @@ static void mqtt_app_start(void)
 
     ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
     client = esp_mqtt_client_init(&mqtt_cfg);
-    esp_mqtt_client_start(client);
+    rc = esp_mqtt_client_start(client);
+    if (ESP_OK != rc) {
+        ESP_LOGE(MQTT_TAG, "Failed to start ESP client rc = %i", rc);
+    }
 }
 
 void app_main()
