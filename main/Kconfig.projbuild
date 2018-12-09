@@ -35,4 +35,16 @@ config ESP_MQTT_BROKER_USERPWD
     default "passw0rd"
     help
     User password for broker
+
+config MDNS_HOSTNAME
+    string "mDNS Hostname"
+    default "CoffeeMonitor"
+    help
+        default hostname
+
+config MDNS_INSTANCE
+    string "mDNS Instance Name"
+    default "ESP32 coffee filter monitor"
+    help
+        mDNS Instance Name for this device
 endmenu

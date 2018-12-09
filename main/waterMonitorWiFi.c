@@ -8,9 +8,13 @@
 #include <esp_http_server.h>
 #include "waterMonitor.h"
 #include "captdns.h"
+#include "mdns.h"
+
+#define WM_MDNS_INSTANCE CONFIG_MDNS_INSTANCE
 
 const char TAGWIFI[] = "waterMonitorWiFi";
 const char TAGHPPTD[] = "waterMonitorHttpd";
+static const char c_config_hostname[] = CONFIG_MDNS_HOSTNAME;
 
 // ******************** Web Server
 
@@ -191,6 +195,28 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 	return ESP_OK;
 }
 
+static void initialise_mdns(char *hostname)
+{
+    //initialize mDNS
+    ESP_ERROR_CHECK( mdns_init() );
+    //set mDNS hostname (required if you want to advertise services)
+    ESP_ERROR_CHECK( mdns_hostname_set(hostname) );
+    ESP_LOGI(TAG, "mdns hostname set to: [%s]", hostname);
+    //set default mDNS instance name
+    ESP_ERROR_CHECK( mdns_instance_name_set(WM_MDNS_INSTANCE) );
+
+    //structure with TXT records
+    mdns_txt_item_t serviceTxtData[3] = {
+        {"board","esp32"},
+        {"u","user"},
+        {"p","password"}
+    };
+
+    //initialize service
+    ESP_ERROR_CHECK( mdns_service_add(hostname, "_http", "_tcp", 80, serviceTxtData, 3) );
+    //change TXT item value
+    ESP_ERROR_CHECK( mdns_service_txt_item_set("_http", "_tcp", "u", "admin") );
+}
 
 void wifiStart(void *arg) {
     nvs_flash_init();
@@ -208,6 +234,16 @@ void wifiStart(void *arg) {
     ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_config));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+
+    _Static_assert(sizeof(c_config_hostname) < CONFIG_MAIN_TASK_STACK_SIZE/2, "Configured mDNS name consumes more than half of the stack. Please select a shorter host name or extend the main stack size please.");
+    const size_t config_hostname_len = sizeof(c_config_hostname) - 1; // without term char
+    char hostname[config_hostname_len + 1 + 3*2 + 1]; // adding underscore + 3 digits + term char
+    uint8_t mac[6];
+
+    // adding 3 LSBs from mac addr to setup a board specific name
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(hostname, sizeof(hostname), "%s_%02x%02X%02X", c_config_hostname, mac[3], mac[4], mac[5]);
+
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = CONFIG_ESP_WIFI_SSID,
@@ -216,20 +252,23 @@ void wifiStart(void *arg) {
     };
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
     wifi_config_t apConfig = {
-   .ap = {
-      .ssid="ESP32",
-      .ssid_len=0,
-      .password="passw0rd",
-      .channel=0,
-      .authmode=WIFI_AUTH_WPA_WPA2_PSK,
-      .ssid_hidden=0,
-      .max_connection=4,
-      .beacon_interval=100
-    } };
+    .ap = {
+        .ssid="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        .ssid_len=0,
+        .password="passw0rd",
+        .channel=0,
+        .authmode=WIFI_AUTH_WPA_WPA2_PSK,
+        .ssid_hidden=0,
+        .max_connection=4,
+        .beacon_interval=100
+        } 
+    };
+    snprintf((char *)apConfig.ap.ssid, sizeof(hostname), "%s", hostname);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &apConfig));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "waiting for wifi network...");
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
     captdnsInit();
+    initialise_mdns(hostname);
     
 }
