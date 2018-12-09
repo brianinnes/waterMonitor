@@ -92,8 +92,11 @@ void app_main()
     static httpd_handle_t server = NULL;
     esp_log_level_set("*", ESP_LOG_INFO);
     // esp_log_level_set(TAG, ESP_LOG_DEBUG);
-    ESP_LOGI(TAG, "ESP32 water monitor!\n");
+    esp_log_level_set("DS18B20", ESP_LOG_DEBUG);
 
+    ESP_LOGI(TAG, "ESP32 water monitor!\n");
+    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[14], PIN_FUNC_GPIO);
+    
     xMQTTClientMutex = xSemaphoreCreateBinary();
     if (NULL == xMQTTClientMutex) {
         ESP_LOGE(TAG, "Failed to create xMQTTClientMutex");

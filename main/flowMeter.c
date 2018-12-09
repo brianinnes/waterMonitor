@@ -13,6 +13,9 @@
 #include "waterMonitor.h"
 #include "esp_adc_cal.h"
 #include "esp_spiffs.h"
+#include "owb.h"
+#include "owb_rmt.h"
+#include "ds18b20.h"
 
 // Flow meter handler
 long litreClicks = 0L;
@@ -21,6 +24,11 @@ TickType_t delay_5Sec = 5000/portTICK_PERIOD_MS;
 TickType_t delay_1Sec = 1000/portTICK_PERIOD_MS;
 TickType_t delay_100ms = 100/portTICK_PERIOD_MS;
 
+#define OW_MAX_DEVICES          (8)
+#define DS18B20_RESOLUTION   (DS18B20_RESOLUTION_12_BIT)
+#define SAMPLE_PERIOD        (1000)   // milliseconds
+
+#define TEMP_18B20_GPIO (14)
 #define PULSEPERLITRE 1870
 #define FLOW_GPIO (27)
 #define PRE_TDS_GPIO (25)
@@ -28,9 +36,10 @@ TickType_t delay_100ms = 100/portTICK_PERIOD_MS;
 #define POST_TDS_GPIO (26)
 #define POST_TDS_ADC (34)
 #define DEFAULT_VREF  1100
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<PRE_TDS_GPIO) | (1ULL<<POST_TDS_GPIO))
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<PRE_TDS_GPIO) | (1ULL<<POST_TDS_GPIO) | (1ULL<<TEMP_18B20_GPIO))
 #define PERSIST_DIFFERENCE 500
 #define PERSIST_PERIOD 600
+#define TDS_VREF 1.18 
 
 static esp_adc_cal_characteristics_t *adc_chars;
 static adc1_channel_t pre, post;
@@ -47,6 +56,7 @@ typedef struct {
 typedef struct {
     int preFilter;
     int postFilter;
+    float temp;
 } reportQualityQ_t;
 
 inline long getCurrentPulses() {
@@ -133,8 +143,90 @@ int readTDS(uint8_t powerPin, adc1_channel_t analogChannel, long Pulses) {
 void vTaskQuality ( void *pvParameters )
 {
     long pulses;
+    int sample_count = 0;
+    int num_devices = 0;
+    bool found = false;
+    
     reportQualityQ_t report;
     ESP_LOGI(TAG, "Starting Quality_task");
+    OneWireBus * owb;
+    owb_rmt_driver_info rmt_driver_info;
+    owb = owb_rmt_initialize(&rmt_driver_info, TEMP_18B20_GPIO, RMT_CHANNEL_1, RMT_CHANNEL_0);
+    owb_use_crc(owb, true);
+    if (num_devices > 0)
+
+    // Find all connected devices
+    ESP_LOGD(TAG,"Finding devices");
+    OneWireBus_ROMCode device_rom_codes[OW_MAX_DEVICES] = {0};
+    OneWireBus_SearchState search_state = {0};
+    owb_search_first(owb, &search_state, &found);
+    while (found)
+    {
+        char rom_code_s[17];
+        owb_string_from_rom_code(search_state.rom_code, rom_code_s, sizeof(rom_code_s));
+        ESP_LOGD(TAG, "Device %d found: %s\n", num_devices, rom_code_s);
+        device_rom_codes[num_devices] = search_state.rom_code;
+        ++num_devices;
+        owb_search_next(owb, &search_state, &found);
+    }
+    ESP_LOGD(TAG, "Found %d device%s\n", num_devices, num_devices == 1 ? "" : "s");
+    if (num_devices == 1)
+    {
+        // For a single device only:
+        OneWireBus_ROMCode rom_code;
+        owb_status status = owb_read_rom(owb, &rom_code);
+        if (status == OWB_STATUS_OK)
+        {
+            char rom_code_s[OWB_ROM_CODE_STRING_LENGTH];
+            owb_string_from_rom_code(rom_code, rom_code_s, sizeof(rom_code_s));
+            ESP_LOGD(TAG, "Single device %s present\n", rom_code_s);
+        }
+        else
+        {
+            ESP_LOGE(TAG, "An error occurred reading ROM code: %d", status);
+        }
+    }
+    else
+    {
+        OneWireBus_ROMCode known_device = {
+            .fields.family = { 0x28 },
+            .fields.serial_number = { 0xee, 0xb2, 0xa5, 0x2c, 0x16, 0x02 },
+            .fields.crc = { 0x15 },
+        };
+        char rom_code_s[OWB_ROM_CODE_STRING_LENGTH];
+        owb_string_from_rom_code(known_device, rom_code_s, sizeof(rom_code_s));
+        bool is_present = false;
+
+        owb_status search_status = owb_verify_rom(owb, known_device, &is_present);
+        if (search_status == OWB_STATUS_OK)
+        {
+            ESP_LOGD(TAG, "Device %s is %s\n", rom_code_s, is_present ? "present" : "not present");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "An error occurred searching for known device: %d", search_status);
+        }
+    }
+
+    // Create DS18B20 devices on the 1-Wire bus
+    DS18B20_Info * devices[OW_MAX_DEVICES] = {0};
+    for (int i = 0; i < num_devices; ++i)
+    {
+        DS18B20_Info * ds18b20_info = ds18b20_malloc();  // heap allocation
+        devices[i] = ds18b20_info;
+
+        if (num_devices == 1)
+        {
+            ESP_LOGD(TAG, "Single device optimisations enabled\n");
+            ds18b20_init_solo(ds18b20_info, owb);          // only one device on bus
+        }
+        else
+        {
+            ds18b20_init(ds18b20_info, owb, device_rom_codes[i]); // associate with bus and device
+        }
+        ds18b20_use_crc(ds18b20_info, true);           // enable CRC check for temperature readings
+        ds18b20_set_resolution(ds18b20_info, DS18B20_RESOLUTION);
+    }
     while(1) {
         ESP_LOGI(TAG, "Waiting on flow stopped queue");
 		xQueueReceive(qStoppedFlow, &pulses, portMAX_DELAY);
@@ -143,11 +235,34 @@ void vTaskQuality ( void *pvParameters )
         if ((0 <= report.preFilter) && (pulses == getCurrentPulses())) {
             report.postFilter = readTDS(POST_TDS_GPIO, post, pulses);
             if ((0 <= report.postFilter) && (pulses == getCurrentPulses())) {
+                ds18b20_convert_all(owb);
+
+                // In this application all devices use the same resolution,
+                // so use the first device to determine the delay
+                ds18b20_wait_for_conversion(devices[0]);
+
+                // Read the results immediately after conversion otherwise it may fail
+                // (using printf before reading may take too long)
+                float readings[OW_MAX_DEVICES] = { 0 };
+                DS18B20_ERROR errors[OW_MAX_DEVICES] = { 0 };
+
+                for (int i = 0; i < num_devices; ++i)
+                {
+                    errors[i] = ds18b20_read_temp(devices[i], &readings[i]);
+                }
+                report.temp = (num_devices > 0) ? readings[0] : 0.0;
                 ESP_LOGD(TAG, "sending message on report quality queue");
                 xQueueSendToBack(qReportQuality, &report, ( TickType_t )0);
             }
         }
     }
+    
+    // clean up dynamically allocated data
+    for (int i = 0; i < num_devices; ++i)
+    {
+        ds18b20_free(&devices[i]);
+    }
+    owb_uninitialize(owb);
     vTaskDelete( NULL );    
 }
 
@@ -268,15 +383,34 @@ void vTaskReportQuality( void *pvParameters )
 {
     reportQualityQ_t report;
     int msg_id;
+    float compensationCoefficient, pre_averageVoltage, pre_compensationVolatge, pre_tdsValue, post_averageVoltage, post_compensationVolatge, post_tdsValue;
+    float adcCompensation = 1 + (1/3.9); // 1/3.9 (11dB) attenuation.
+    float vPerDiv = (TDS_VREF / 4096) * adcCompensation; // Calculate the volts per division using the VREF taking account of the chosen attenuation value.
     while(1) {
         //TODO Add Error checking!!!!
         ESP_LOGI(TAG, "Waiting on reporting Quality queue");
 		/*BaseType_t rc = */ xQueueReceive(qReportQuality, &report, portMAX_DELAY);
+
+        ESP_LOGD(TAG, "Converting an analog value to a TDS PPM value.");
+        //https://www.dfrobot.com/wiki/index.php/Gravity:_Analog_TDS_Sensor_/_Meter_For_Arduino_SKU:_SEN0244#More_Documents
+        compensationCoefficient=1.0+0.02*(report.temp-25.0);    //temperature compensation formula: fFinalResult(25^C) = fFinalResult(current)/(1.0+0.02*(fTP-25.0));
+        
+        pre_averageVoltage = report.preFilter * vPerDiv; // Convert the ADC reading into volts
+        pre_compensationVolatge = pre_averageVoltage / compensationCoefficient;  //temperature compensation
+        pre_tdsValue = (133.42 * pre_compensationVolatge * pre_compensationVolatge * pre_compensationVolatge - 255.86 * pre_compensationVolatge * pre_compensationVolatge + 857.39 * pre_compensationVolatge) * 0.5; //convert voltage value to tds value
+        post_averageVoltage = report.postFilter * vPerDiv; // Convert the ADC reading into volts
+        post_compensationVolatge = post_averageVoltage / compensationCoefficient;  //temperature compensation
+        post_tdsValue = (133.42 * post_compensationVolatge * post_compensationVolatge * post_compensationVolatge - 255.86 * post_compensationVolatge * post_compensationVolatge + 857.39 * post_compensationVolatge) * 0.5; //convert voltage value to tds value
+
+
         cJSON *json = cJSON_CreateObject();
         cJSON_AddStringToObject(json, "device", CONFIG_ESP_MQTT_CLIENTID);
         cJSON *data = cJSON_CreateObject();
         cJSON_AddNumberToObject(data, "pre", report.preFilter);
         cJSON_AddNumberToObject(data, "post", report.postFilter);
+        cJSON_AddNumberToObject(data, "temp", report.temp);
+        cJSON_AddNumberToObject(data, "preTDS", pre_tdsValue);
+        cJSON_AddNumberToObject(data, "postTDS", post_tdsValue);
         cJSON_AddItemToObject(json, "d", data);
 
         char *buffer = cJSON_PrintUnformatted(json);
@@ -394,6 +528,7 @@ void flow_init() {
     gpio_config(&io_conf);
     gpio_set_level(PRE_TDS_GPIO, 0);
     gpio_set_level(POST_TDS_GPIO, 0);
+    gpio_set_level(TEMP_18B20_GPIO, 0);
 
     ESP_LOGI(TAG, "Initializing SPIFFS");
     
