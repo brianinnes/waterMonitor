@@ -21,12 +21,10 @@ esp_err_t hello_get_handler(httpd_req_t *req)
     size_t buf_len;
 
     ESP_LOGI(TAGHPPTD, "hello handler called");
-    /* Get header value string length and allocate memory for length + 1,
-     * extra byte for null termination */
     buf_len = httpd_req_get_hdr_value_len(req, "Host") + 1;
     if (buf_len > 1) {
         buf = malloc(buf_len);
-        /* Copy null terminated value string into buffer */
+        // Copy null terminated value string into buffer
         if (httpd_req_get_hdr_value_str(req, "Host", buf, buf_len) == ESP_OK) {
             ESP_LOGI(TAGHPPTD, "Found header => Host: %s", buf);
         }
@@ -51,15 +49,15 @@ esp_err_t hello_get_handler(httpd_req_t *req)
         free(buf);
     }
 
-    /* Read URL query string length and allocate memory for length + 1,
-     * extra byte for null termination */
+    // Read URL query string length and allocate memory for length + 1,
+    // extra byte for null termination
     buf_len = httpd_req_get_url_query_len(req) + 1;
     if (buf_len > 1) {
         buf = malloc(buf_len);
         if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
             ESP_LOGI(TAGHPPTD, "Found URL query => %s", buf);
             char param[32];
-            /* Get value of expected key from query string */
+            // Get value of expected key from query string
             if (httpd_query_key_value(buf, "query1", param, sizeof(param)) == ESP_OK) {
                 ESP_LOGI(TAGHPPTD, "Found URL query parameter => query1=%s", param);
             }
@@ -73,28 +71,28 @@ esp_err_t hello_get_handler(httpd_req_t *req)
         free(buf);
     }
 
-    /* Set some custom headers */
+    // Set some custom headers
     httpd_resp_set_hdr(req, "Custom-Header-1", "Custom-Value-1");
     httpd_resp_set_hdr(req, "Custom-Header-2", "Custom-Value-2");
 
-    /* Send response with custom headers and body set as the
-     * string passed in user context*/
+    // Send response with custom headers and body set as the
+    // string passed in user context
     const char* resp_str = (const char*) req->user_ctx;
     httpd_resp_send(req, resp_str, strlen(resp_str));
 
-    /* After sending the HTTP response the old HTTP request
-     * headers are lost. Check if HTTP request headers can be read now. */
+    // After sending the HTTP response the old HTTP request
+    // headers are lost. Check if HTTP request headers can be read now.
     if (httpd_req_get_hdr_value_len(req, "Host") == 0) {
         ESP_LOGI(TAGHPPTD, "Request headers lost");
     }
     return ESP_OK;
 }
 
-/* An HTTP GET handler */
+// An HTTP GET handler
 esp_err_t redirect_get_handler(httpd_req_t *req) {
     ESP_LOGI(TAGHPPTD, "redirect handler called");
     httpd_resp_set_hdr(req, "location", (const char*) req->user_ctx);
-    httpd_resp_set_status(req, HTTPD_302);
+//    httpd_resp_set_status(req, HTTPD_302);
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -125,8 +123,8 @@ httpd_handle_t start_webserver(void)
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
         ESP_LOGI(TAGHPPTD, "Registering URI handlers");
-        httpd_register_uri_handler(server, &hello);
-        httpd_register_404_handler(server, &redirect);
+//        httpd_register_uri_handler(server, &hello);
+//        httpd_register_404_handler(server, &redirect);
         return server;
     }
 
@@ -142,9 +140,11 @@ void stop_webserver(httpd_handle_t server)
 
 // ******************** WiFi
 
+
 // Event group
 static EventGroupHandle_t wifi_event_group;
 const int CONNECTED_BIT = BIT0;
+
 
 // Wifi event handler
 static esp_err_t event_handler(void *ctx, system_event_t *event)
@@ -170,7 +170,7 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         break;
     
     case SYSTEM_EVENT_AP_START:
-         /* Start the web server */
+         // Start the web server
         if (*server == NULL) {
             *server = start_webserver();
         }
@@ -190,6 +190,7 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 
 	return ESP_OK;
 }
+
 
 void wifiStart(void *arg) {
     nvs_flash_init();
@@ -230,4 +231,5 @@ void wifiStart(void *arg) {
     ESP_LOGI(TAG, "waiting for wifi network...");
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
     captdnsInit();
+    
 }
