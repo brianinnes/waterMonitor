@@ -93,7 +93,8 @@ void app_main()
     esp_log_level_set("*", ESP_LOG_INFO);
     // esp_log_level_set(TAG, ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "ESP32 water monitor!\n");
-
+    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[14], PIN_FUNC_GPIO);
+    
     xMQTTClientMutex = xSemaphoreCreateBinary();
     if (NULL == xMQTTClientMutex) {
         ESP_LOGE(TAG, "Failed to create xMQTTClientMutex");

@@ -42,3 +42,4 @@ sdkconfig
 node_modules
 *.backup
 **/.config.json
+temp
