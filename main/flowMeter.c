@@ -3,6 +3,7 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include "driver/adc.h"
 #include <cJSON.h>
@@ -431,6 +432,9 @@ void vTaskReportQuality( void *pvParameters )
 }
 
 void persistPulses(long pulses) {
+    if (!esp_spiffs_mounted("config")) {
+        ESP_LOGE(TAG, "persistPulses: Config partition not mounted");
+    }
     if (rename("/fs/pulses.txt", "/fs/pulses_old.txt") != 0) {
         ESP_LOGE(TAG, "Rename failed");
     }
@@ -446,27 +450,44 @@ void persistPulses(long pulses) {
 }
 
 long readPulses() {
-    long ret;
-    FILE* f = fopen("/fs/pulses.txt", "rb");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
-        f = fopen("/fs/pulses_old.txt", "rb");
-        if (f == NULL) {
-            return 0L;
-        }
+    long ret = 0L;
+    if (!esp_spiffs_mounted("config")) {
+        ESP_LOGE(TAG, "persistPulses: Config partition not mounted");
     }
-    size_t s = fread(&ret, sizeof ret, 1, f);
-    fclose(f);
-    if (s == 0) {
-        f = fopen("/fs/pulses_old.txt", "rb");
+    // Check if pulses file exists
+    struct stat st;
+    if (stat("/fs/pulses.txt", &st) == 0) {
+        FILE* f = fopen("/fs/pulses.txt", "rb");
         if (f == NULL) {
-            return 0L;
+            ESP_LOGE(TAG, "Failed to open pulses file for reading");
+            f = fopen("/fs/pulses_old.txt", "rb");
+            if (f == NULL) {
+                return 0L;
+            }
         }
         size_t s = fread(&ret, sizeof ret, 1, f);
         fclose(f);
         if (s == 0) {
-            return 0L;
+            f = fopen("/fs/pulses_old.txt", "rb");
+            if (f == NULL) {
+                return 0L;
+            }
+            size_t s = fread(&ret, sizeof ret, 1, f);
+            fclose(f);
+            if (s == 0) {
+                return 0L;
+            }
         }
+    } else {
+        // no pulses file exists, create one
+        ESP_LOGW(TAG, "No pulses file available");
+        FILE* f = fopen("/fs/pulses.txt", "wb");
+        if (f == NULL) {
+            ESP_LOGE(TAG, "Failed to open file for writing");
+            return;
+        }
+        fwrite(&ret, sizeof ret, 1, f);
+        fclose(f);
     }
     ESP_LOGI(TAG, "Pulse file read = %li", ret);
     return ret;
@@ -532,14 +553,14 @@ void flow_init() {
 
     ESP_LOGI(TAG, "Initializing SPIFFS");
     
-    esp_vfs_spiffs_conf_t conf = {
+    esp_vfs_spiffs_conf_t fs_conf = {
       .base_path = "/fs",
-      .partition_label = NULL,
+      .partition_label = "config",
       .max_files = 5,
       .format_if_mount_failed = true
     };
     
-    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    esp_err_t ret = esp_vfs_spiffs_register(&fs_conf);
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
             ESP_LOGE(TAG, "Failed to mount or format filesystem");
@@ -548,6 +569,39 @@ void flow_init() {
         } else {
             ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
         }
+    } 
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info("config", &total, &used);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+    }
+
+
+    esp_vfs_spiffs_conf_t web_conf = {
+      .base_path = "/web",
+      .partition_label = "web",
+      .max_files = 5,
+      .format_if_mount_failed = false
+    };
+      
+    ret = esp_vfs_spiffs_register(&web_conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+    }
+
+    ret = esp_spiffs_info("web", &total, &used);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
 
     //create queues and start tasks to manage waterflow monitoring
