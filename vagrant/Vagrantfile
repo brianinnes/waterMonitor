@@ -33,11 +33,11 @@ Vagrant.configure("2") do |config|
 
   config.vm.provision "shell", inline: <<-SHELL
     hostname -b waterMonitor
-    route add default gw 192.168.0.1
+#    route add default gw 192.168.0.1
     echo "********** Updating and extending base **********"
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get -y upgrade
-    apt-get install -y build-essential avahi-daemon avahi-discover libnss-mdns
+    apt-get install -y build-essential avahi-daemon avahi-discover libnss-mdns netatalk
 
     echo "********** Installing CouchDB ************"
     apt-get install -y curl erlang apt-transport-https
@@ -71,9 +71,11 @@ password_file /etc/mosquitto/passwd
 EOF
 
   echo "********** Securing Mosquitto **********"
-  openssl genrsa -des3 -passout pass:passw0rd -out m2mqtt_ca.key 2048 -batch
+#  openssl genrsa -des3 -passout pass:passw0rd -out m2mqtt_ca.key 2048 -batch
+  openssl genpkey -algorithm RSA -out m2mqtt_ca.key -pass pass:passw0rd -pkeyopt rsa_keygen_bits:2048
   openssl req -new -x509 -days 3650 -key m2mqtt_ca.key -passin pass:passw0rd -out m2mqtt_ca.crt -subj "/C=GB/ST=Bournemouth/L=Bournemouth/O=MakeBournemouth/OU=vPiP/CN=makebournemouth.com" -batch
-  openssl genrsa -out m2mqtt_srv.key 2048 -batch
+#  openssl genrsa -out m2mqtt_srv.key 2048 -batch
+  openssl genpkey -algorithm RSA -out m2mqtt_srv.key -pass pass:passw0rd -pkeyopt rsa_keygen_bits:2048
   openssl req -new -out m2mqtt_srv.csr -key m2mqtt_srv.key -passin pass:passw0rd -subj "/C=GB/ST=Bournemouth/L=Bournemouth/O=MakeBournemouth/OU=waterMonitor/CN=waterMonitor.local" -batch
   openssl x509 -req -in m2mqtt_srv.csr -CA m2mqtt_ca.crt -CAkey m2mqtt_ca.key -CAcreateserial -passin pass:passw0rd -out m2mqtt_srv.crt -days 3650
   rm m2mqtt_srv.csr
