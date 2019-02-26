@@ -43,3 +43,7 @@ node_modules
 *.backup
 **/.config.json
 temp
+*.bin
+
+# Components
+cpp_utils
