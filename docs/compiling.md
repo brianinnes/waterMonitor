@@ -16,6 +16,13 @@ In the **Serial flasher config** settings you can set the default port that the 
 
 Exit and save the project configuration.
 
+## Additional components needed for ds18b20 thermometer
+
+Add the following to the components directory:
+
+- https://www.github.com/DavidAntliff/esp32-ds18b20
+- https://github.com/DavidAntliff/esp32-owb
+
 ## Build and Flash the binary to the device
 
 To build the binary for the ESP32 device run command:

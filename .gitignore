@@ -41,9 +41,11 @@ sdkconfig
 .vagrant
 node_modules
 *.backup
-**/.config.json
+vagrant/nodered/.config.json
 temp
 *.bin
+screenlog*
 
 # Components
 cpp_utils
+
