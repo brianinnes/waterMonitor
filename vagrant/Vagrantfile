@@ -37,7 +37,7 @@ Vagrant.configure("2") do |config|
     echo "********** Updating and extending base **********"
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get -y upgrade
-    apt-get install -y build-essential avahi-daemon avahi-discover libnss-mdns netatalk
+    apt-get install -y build-essential avahi-daemon avahi-discover libnss-mdns netatalk net-tools
 
     echo "********** Installing CouchDB ************"
     apt-get install -y curl erlang apt-transport-https
